@@ -121,6 +121,25 @@ def test_outcome_limits_are_explicit_and_checked_before_generation_or_consumptio
             maximum_count=2,
         )
 
+    with pytest.raises(OutcomeLimitError):
+        OutcomeSequence(
+            source="supplied",
+            outcomes=("0", "00", "1"),
+            maximum_count=2,
+        )
+
+
+def test_string_input_is_not_interpreted_as_an_outcome_collection() -> None:
+    with pytest.raises(OutcomeSequenceError, match="collection"):
+        OutcomeSequence.from_supplied("00", maximum_count=2)
+
+    with pytest.raises(OutcomeSequenceError, match="collection"):
+        OutcomeSequence(
+            source="supplied",
+            outcomes="00",  # type: ignore[arg-type]
+            maximum_count=2,
+        )
+
 
 def test_generated_sequence_persists_actual_outcomes_and_replay_uses_no_rng(
     monkeypatch: pytest.MonkeyPatch,
@@ -144,6 +163,8 @@ def test_generated_sequence_persists_actual_outcomes_and_replay_uses_no_rng(
     assert restored.source == "server_generated"
     assert restored.generator == GENERATOR_ID
     assert restored.sequence_sha256 == generated.sequence_sha256
+    assert generated.source_verified is True
+    assert restored.source_verified is False
 
 
 def test_generated_metadata_is_required_only_for_generated_sequences() -> None:
@@ -161,3 +182,32 @@ def test_generated_metadata_is_required_only_for_generated_sequences() -> None:
             maximum_count=1,
             generator=GENERATOR_ID,
         )
+
+    forged = OutcomeSequence(
+        source="server_generated",
+        outcomes=(AmericanPocket.ZERO,),
+        maximum_count=1,
+        generator=GENERATOR_ID,
+        source_verified=True,
+    )
+    assert forged.source_verified is False
+
+
+def test_legacy_sequence_format_migrates_as_unverified_provenance() -> None:
+    legacy = {
+        "formatVersion": "1.0",
+        "source": "server_generated",
+        "generator": GENERATOR_ID,
+        "outcomes": ["0", "00"],
+        "outcomeSequenceSha256": sha256(b'{"outcomes":["0","00"]}').hexdigest(),
+    }
+
+    restored = OutcomeSequence.from_json(
+        json.dumps(legacy),
+        maximum_count=2,
+        maximum_bytes=2048,
+    )
+
+    assert restored.format_version == "1.1"
+    assert restored.source == "server_generated"
+    assert restored.source_verified is False

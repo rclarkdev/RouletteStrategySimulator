@@ -1,6 +1,6 @@
-# Local development (Phase 1 and outcome-only Phase 3)
+# Local development (foundation, outcome primitives, and guest storage)
 
-This repository contains the project foundation and outcome-only American pocket sequence/replay primitives. No strategy rules, wager evaluation, financial calculations, complete simulation, strategy editor, authentication, user-data storage, or 3D wheel are implemented.
+This repository contains the project foundation, outcome-only American pocket sequence/replay primitives, and a guest-side IndexedDB adapter for non-runnable strategies, preferences, and saved sequences. The adapter exposes no simulation-history API. No strategy rules, wager evaluation, financial calculations, complete simulation, strategy editor, authentication, server-side user-data storage, or 3D wheel are implemented.
 
 ## Prerequisites
 
@@ -60,3 +60,5 @@ The API reads `APP_ENV` (`development`, `test`, or `production`) and `APP_VERSIO
 ## CI
 
 GitHub Actions runs frontend install, lint, formatting check, tests, and production build, plus backend editable install, Ruff checks, and pytest. CI dependency installation occurs in an isolated runner; local setup is performed explicitly by the developer using the commands above.
+
+Frontend guest records are stored only in the browser through `frontend/src/storage`. The adapter validates non-runnable strategy documents, sequence digests, preferences, and versioned backup imports before writing. Imported generated-sequence provenance is treated as unverified. IndexedDB data is local to the browser profile and may be cleared by the user or browser; exports are the portability/backup mechanism. No simulation results or server/account records are persisted by this phase.

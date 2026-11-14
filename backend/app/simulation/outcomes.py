@@ -139,8 +139,10 @@ AMERICAN_RED_POCKETS = frozenset(
         "36",
     )
 )
-OUTCOME_FORMAT_VERSION = "1.0"
+OUTCOME_FORMAT_VERSION = "1.1"
+LEGACY_OUTCOME_FORMAT_VERSION = "1.0"
 GENERATOR_ID = "python-secrets-v1"
+_GENERATION_TOKEN = object()
 
 
 class OutcomeSequenceError(ValueError):
@@ -198,6 +200,8 @@ class OutcomeSequence:
     generator: str | None = None
     format_version: str = OUTCOME_FORMAT_VERSION
     sequence_sha256: str = field(default="")
+    source_verified: bool = field(default=False, repr=False)
+    _factory_token: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.format_version, str):
@@ -209,15 +213,19 @@ class OutcomeSequence:
         if self.source not in {"supplied", "server_generated"}:
             raise OutcomeSequenceError("source must be supplied or server_generated")
         _validate_limit(self.maximum_count)
+        if isinstance(self.outcomes, (str, bytes, bytearray)):
+            raise OutcomeSequenceError("outcomes must be a collection of pocket tokens")
         try:
             raw_pockets = tuple(islice(iter(self.outcomes), self.maximum_count + 1))
-            _validate_count(len(raw_pockets), self.maximum_count)
+        except TypeError as error:
+            raise OutcomeSequenceError(str(error)) from error
+        _validate_count(len(raw_pockets), self.maximum_count)
+        try:
             pockets = tuple(AmericanPocket.parse(item) for item in raw_pockets)
-        except (TypeError, ValueError) as error:
+        except ValueError as error:
             raise OutcomeSequenceError(str(error)) from error
         if not pockets:
             raise OutcomeSequenceError("outcome sequence must not be empty")
-        _validate_count(len(pockets), self.maximum_count)
         if self.source == "supplied" and self.generator is not None:
             raise OutcomeSequenceError("supplied outcomes must not declare a generator")
         if self.generator is not None and not isinstance(self.generator, str):
@@ -226,6 +234,8 @@ class OutcomeSequence:
             raise OutcomeSequenceError(
                 "generated outcomes require the supported generator identifier"
             )
+        verified = self._factory_token is _GENERATION_TOKEN and self.source == "server_generated"
+        object.__setattr__(self, "source_verified", verified)
         object.__setattr__(self, "outcomes", pockets)
         expected_digest = hashlib.sha256(_canonical_outcome_bytes(pockets)).hexdigest()
         if self.sequence_sha256 and self.sequence_sha256 != expected_digest:
@@ -241,6 +251,8 @@ class OutcomeSequence:
     ) -> OutcomeSequence:
         """Validate and snapshot caller-supplied pockets without coercing numbers."""
         _validate_limit(maximum_count)
+        if isinstance(outcomes, (str, bytes, bytearray)):
+            raise OutcomeSequenceError("outcomes must be a collection of pocket tokens")
         values = tuple(islice(iter(outcomes), maximum_count + 1))
         _validate_count(len(values), maximum_count)
         return cls(source="supplied", outcomes=values, maximum_count=maximum_count)
@@ -267,6 +279,7 @@ class OutcomeSequence:
             outcomes=outcomes,
             maximum_count=maximum_count,
             generator=GENERATOR_ID,
+            _factory_token=_GENERATION_TOKEN,
         )
 
     def replay(self) -> Iterator[AmericanPocket]:
@@ -281,6 +294,7 @@ class OutcomeSequence:
             "generator": self.generator,
             "outcomes": [pocket.value for pocket in self.outcomes],
             "outcomeSequenceSha256": self.sequence_sha256,
+            "sourceVerified": self.source_verified,
         }
         return json.dumps(
             payload,
@@ -318,6 +332,10 @@ class OutcomeSequence:
             "outcomes",
             "outcomeSequenceSha256",
         }
+        if payload.get("formatVersion") == OUTCOME_FORMAT_VERSION:
+            expected_fields.add("sourceVerified")
+        elif payload.get("formatVersion") != LEGACY_OUTCOME_FORMAT_VERSION:
+            raise OutcomeSequenceError("unsupported outcome sequence format version")
         if set(payload) != expected_fields:
             raise OutcomeSequenceError("outcome sequence record has missing or unknown fields")
         values = payload["outcomes"]
@@ -332,13 +350,20 @@ class OutcomeSequence:
             raise OutcomeSequenceError("generator must be a string or null")
         if not isinstance(payload["formatVersion"], str):
             raise OutcomeSequenceError("format version must be a string")
+        if (
+            payload["formatVersion"] == OUTCOME_FORMAT_VERSION
+            and not isinstance(payload["sourceVerified"], bool)
+        ):
+            raise OutcomeSequenceError("sourceVerified must be a boolean")
         return cls(
             source=payload["source"],
             outcomes=tuple(values),
             maximum_count=maximum_count,
             generator=payload["generator"],
-            format_version=payload["formatVersion"],
+            format_version=OUTCOME_FORMAT_VERSION,
             sequence_sha256=payload["outcomeSequenceSha256"],
+            # Imported JSON cannot attest to its own origin; only generate() can.
+            source_verified=False,
         )
 
 

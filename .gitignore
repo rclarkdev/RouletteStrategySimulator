@@ -25,6 +25,7 @@ htmlcov/
 
 # Editors and operating systems
 .vscode/
+.vs/
 .idea/
 .DS_Store
 Thumbs.db
